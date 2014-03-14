@@ -23,8 +23,6 @@ function client_service_update_cron(){
 function _client_service_add_system_user($client_id, $client_name, $dni_cif, $client_email, $service_code) {
   $user_info = _client_service_validate_username($dni_cif);
   if(!$user_info) {
-    // Pending to add field_user_dbf_code.
-    
     // Add new user credentials to Drupal system.
     $password = user_password(8);
     $new_user = array(
@@ -34,8 +32,10 @@ function _client_service_add_system_user($client_id, $client_name, $dni_cif, $cl
       'status' => ($service_code != 'CONT') ? 1 : 0,
       'language' => 'es',
       'init' => $client_id,
-      'field_user_full_name' => array(LANGUAGE_NONE => array(array('value' => $client_name))),
-      'roles' => array(5 => 'vlt_client'),
+      // Cutom fields: DBF Code, Client name
+      'field_user_client_name' => array(LANGUAGE_NONE => array(array('value' => $client_name))),
+      'field_user_client_dbf_code' => array(LANGUAGE_NONE => array(array('value' => $client_id))),
+      'roles' => array(5 => 'customer'),
     );
     $user_info = user_save(NULL, $new_user);
     $user_info->password = $new_user['pass'];
@@ -58,7 +58,7 @@ function _client_service_add_services($client_name, $service_code, $client_id, $
   $result = $query
     ->entityCondition('entity_type', 'node')
     ->propertyCondition('type', 'client_service')
-    ->fieldCondition('field_servicio_cliente', 'value', $client_id, '=')
+    ->fieldCondition('field_service_client', 'value', $client_id, '=')
     ->execute();
   dpm($result);
   $results = db_select('node', 'n')
@@ -69,16 +69,20 @@ function _client_service_add_services($client_name, $service_code, $client_id, $
   node_object_prepare($client_service);
   $client_service->title = $client_name . ' (' . $service_code . ')';
   $client_service->language = LANGUAGE_NONE;
-  $client_service->field_servicio_cliente[LANGUAGE_NONE][0]['value'] = $client_id;
-  $client_service->field_servicio_servicio[LANGUAGE_NONE][0]['tid'] = $tax_term->tid;
-  $client_service->field_servicio_fecha[LANGUAGE_NONE][0]['value'] = REQUEST_TIME;
-  $client_service->field_servicio_equipos[LANGUAGE_NONE][0]['value'] = $tax_term->field_servicio_equipos[LANGUAGE_NONE][0]['value'];
+  $client_service->field_service_client[LANGUAGE_NONE][0]['value'] = $client_id;
+  $client_service->field_service_service[LANGUAGE_NONE][0]['tid'] = $tax_term->tid;
+  $client_service->field_service_date[LANGUAGE_NONE][0]['value'] = REQUEST_TIME;
+  $client_service->field_service_hours[LANGUAGE_NONE][0]['value'] = $tax_term->field_tax_service_hours[LANGUAGE_NONE][0]['value']; 
+  $client_service->field_service_computers[LANGUAGE_NONE][0]['value'] = $tax_term->field_tax_service_computers[LANGUAGE_NONE][0]['value'];
+  $client_service->field_service_revisions[LANGUAGE_NONE][0]['value'] = $tax_term->field_tax_service_revisions[LANGUAGE_NONE][0]['value'];
+  $client_service->field_service_payed[LANGUAGE_NONE][0]['value'] = FALSE;
+  $client_service->field_service_bill_number[LANGUAGE_NONE][0]['value'] = '';
   node_save($client_service);
 }
 
 function _client_service_get_term_by_dbf_code($service_terms, $dbf_code) {
   foreach($service_terms as $st) {
-    if($st->field_servicio_dbf_code[LANGUAGE_NONE][0]['value'] == $dbf_code) {
+    if($st->field_tax_service_dbf[LANGUAGE_NONE][0]['value'] == $dbf_code) {
       return $st;
     }
   }
@@ -114,22 +118,29 @@ function client_service_update_execute($is_cron = FALSE){
   foreach($pending_services as $ps){
     // Begin a transaction.
     $transaction = db_transaction();
-    if (isset($ps->email) && !empty($ps->email) && $ps->service_code != 'CONT') {
-      try {
-        // Add the user to the system.
-        _client_service_add_system_user($ps->client_id, $ps->client_name, $ps->dni_cif, $ps->email, $ps->service_code);
-        // Add the client services to the system.
-        $tax_term = _client_service_get_term_by_dbf_code($services_terms, $ps->service_code);
-        _client_service_add_services($ps->client_name, $ps->service_code, $ps->client_id, $tax_term);
-      } catch(Exception $e) {
-        $transaction->rollback();
-        watchdog_exception('client_service_update', $e);
+    
+    $temp_valid_clients = array('000265', '000230', '000237', '000210');
+    if(in_array($ps->client_id, $temp_valid_clients)){
+      
+      if (isset($ps->email) && !empty($ps->email) && $ps->service_code != 'CONT') {
+        try {
+          // Add the user to the system.
+          _client_service_add_system_user($ps->client_id, $ps->client_name, $ps->dni_cif, $ps->email, $ps->service_code);
+          // Add the client services to the system.
+          $tax_term = _client_service_get_term_by_dbf_code($services_terms, $ps->service_code);
+          _client_service_add_services($ps->client_name, $ps->service_code, $ps->client_id, $tax_term);
+        } catch(Exception $e) {
+          $transaction->rollback();
+          watchdog_exception('client_service_update', $e);
+        }
       }
+      // Mark client_service_update processed field as TRUE.
+      $num_updated = db_update('client_service_update')->fields(array('processed' => TRUE))
+        ->condition('client_id', $ps->client_id, '=')
+        ->execute();
+      
     }
-    // Mark client_service_update processed field as TRUE.
-    $num_updated = db_update('client_service_update')->fields(array('processed' => TRUE))
-      ->condition('client_id', $ps->client_id, '=')
-      ->execute();
+    
   }
   return $content;
 }
