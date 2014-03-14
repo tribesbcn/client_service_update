@@ -1,0 +1,10 @@
+name = Client Service Update
+description = Stores new services creation from DBF Client import and update with cron task.
+package = TRT Development
+core = 7.x
+
+dependencies[] = entity
+
+files[] = client_service_update.module
+files[] = client_service_update.install
+

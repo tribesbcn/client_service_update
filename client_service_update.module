@@ -1,0 +1,169 @@
+<?php
+
+/**
+ * Implements hook_cron().
+ */
+function client_service_update_cron(){
+  if (!lock_acquire('client_service_update_locker', 5000.0)) {
+    // Wait for another request that is already doing this work.
+    watchdog('client_service_update', 'Function client service update is executing', array(), WATCHDOG_INFO);
+    client_service_update_execute(TRUE);
+    lock_wait('client_service_update_locker');
+    return FALSE;
+  }
+  
+  try{
+    watchdog('client_service_update', 'Cron client service update executed!', array(), WATCHDOG_INFO);
+  }catch(Exception $e){
+    watchdog('client_service_update', 'Cron client service update failed: %error_message', array('%error_message' => $e->getMessage()), WATCHDOG_ERROR);
+  }
+  lock_release('client_service_update_locker');
+}
+
+function _client_service_add_system_user($client_id, $client_name, $dni_cif, $client_email, $service_code) {
+  $user_info = _client_service_validate_username($dni_cif);
+  if(!$user_info) {
+    // Pending to add field_user_dbf_code.
+    
+    // Add new user credentials to Drupal system.
+    $password = user_password(8);
+    $new_user = array(
+      'name' => $dni_cif,
+      'pass' => $password,
+      'mail' => $client_email,
+      'status' => ($service_code != 'CONT') ? 1 : 0,
+      'language' => 'es',
+      'init' => $client_id,
+      'field_user_full_name' => array(LANGUAGE_NONE => array(array('value' => $client_name))),
+      'roles' => array(5 => 'vlt_client'),
+    );
+    $user_info = user_save(NULL, $new_user);
+    $user_info->password = $new_user['pass'];
+    // Send the e-mail through the user module.
+    //drupal_mail('user', 'register_no_approval_required', $client_email, NULL, array('account' => $account), variable_get('sat_mail', 'sat@vlt.es')); 
+  } else {
+    // Disable users with CONT service.
+    if ($service_code == 'CONT') {
+      $user_info = user_save($user_info, array('status' => 0));
+      // Send the e-mail through the user module.
+      //drupal_mail('user', 'status_blocked', $client_email, NULL, array('account' => $account), variable_get('sat_mail', 'sat@vlt.es'));
+    }
+  }
+  return $user_info;
+}
+
+function _client_service_add_services($client_name, $service_code, $client_id, $tax_term) {
+  // Check if client service exist in the system
+  $query = new EntityFieldQuery;
+  $result = $query
+    ->entityCondition('entity_type', 'node')
+    ->propertyCondition('type', 'client_service')
+    ->fieldCondition('field_servicio_cliente', 'value', $client_id, '=')
+    ->execute();
+  dpm($result);
+  $results = db_select('node', 'n')
+    ->fields('n', array('nid'))->condition('type', 'client_service', '=')->execute()->fetchAssoc();
+  // Add or update the client services to the system.
+  $client_service = new stdClass();
+  $client_service->type = 'client_service';
+  node_object_prepare($client_service);
+  $client_service->title = $client_name . ' (' . $service_code . ')';
+  $client_service->language = LANGUAGE_NONE;
+  $client_service->field_servicio_cliente[LANGUAGE_NONE][0]['value'] = $client_id;
+  $client_service->field_servicio_servicio[LANGUAGE_NONE][0]['tid'] = $tax_term->tid;
+  $client_service->field_servicio_fecha[LANGUAGE_NONE][0]['value'] = REQUEST_TIME;
+  $client_service->field_servicio_equipos[LANGUAGE_NONE][0]['value'] = $tax_term->field_servicio_equipos[LANGUAGE_NONE][0]['value'];
+  node_save($client_service);
+}
+
+function _client_service_get_term_by_dbf_code($service_terms, $dbf_code) {
+  foreach($service_terms as $st) {
+    if($st->field_servicio_dbf_code[LANGUAGE_NONE][0]['value'] == $dbf_code) {
+      return $st;
+    }
+  }
+  return FALSE;
+}
+
+function _client_service_get_vocabulary_by_name($vocabulary_name = 'services') {
+  $vocabs = taxonomy_get_vocabularies(NULL);
+  foreach ($vocabs as $vocab_object) {
+    if ($vocab_object->machine_name == $vocabulary_name) {
+      return $vocab_object;
+    }
+  }
+  return NULL;
+}
+
+function _client_service_validate_username($username) {
+  $user_info = db_select('users', 'u')
+    ->fields('u')->condition('name', $username, '=')->execute()->fetchAssoc();
+  return ($user_info) ? $user_info : FALSE;
+}
+
+function client_service_update_execute($is_cron = FALSE){  
+  $services_tax_voc = _client_service_get_vocabulary_by_name('services');
+  $services_terms = taxonomy_get_tree($services_tax_voc->vid, 0, NULL, TRUE);
+  drupal_set_title(t('Client service update'));
+  $content = array();
+  // Retrieve all not processed records from client_service_update
+  $pending_services = db_select('client_service_update', 'csu')
+    ->fields('csu', array('client_id', 'service_code', 'client_name', 'dni_cif', 'email', 'created', 'processed'))
+    ->condition('processed', 0, '=')->execute();
+  // Create a user account for each client with service.
+  foreach($pending_services as $ps){
+    // Begin a transaction.
+    $transaction = db_transaction();
+    if (isset($ps->email) && !empty($ps->email) && $ps->service_code != 'CONT') {
+      try {
+        // Add the user to the system.
+        _client_service_add_system_user($ps->client_id, $ps->client_name, $ps->dni_cif, $ps->email, $ps->service_code);
+        // Add the client services to the system.
+        $tax_term = _client_service_get_term_by_dbf_code($services_terms, $ps->service_code);
+        _client_service_add_services($ps->client_name, $ps->service_code, $ps->client_id, $tax_term);
+      } catch(Exception $e) {
+        $transaction->rollback();
+        watchdog_exception('client_service_update', $e);
+      }
+    }
+    // Mark client_service_update processed field as TRUE.
+    $num_updated = db_update('client_service_update')->fields(array('processed' => TRUE))
+      ->condition('client_id', $ps->client_id, '=')
+      ->execute();
+  }
+  return $content;
+}
+
+/**
+ * Implements hook_menu().
+ */
+function client_service_update_menu() {
+  $items = array();
+  
+  $items['client_service_update/execute'] = array(
+    'title' => 'Execute client service update',
+    'page callback' => 'client_service_update_execute',
+    'access arguments' => array('execute client_service_update'),
+    'type' => MENU_LOCAL_ACTION,
+    'tab_parent' => 'clients',
+    'tab_root' => 'clients',
+    'weight' => 20,
+  );
+
+  return $items;
+}
+
+/**
+ * Implements hook_permission().
+ */
+function client_service_update_permission() {
+  $permissions = array(
+    'execute client_service_update' => array(
+      'title' => t('Execute client service update'),
+      'description' => t('Allows users to execute client service updates.'),
+      'restrict access' => TRUE,
+    ),
+  );
+
+  return $permissions;
+}

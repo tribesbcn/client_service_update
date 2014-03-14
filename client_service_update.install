@@ -1,0 +1,82 @@
+<?php
+
+/**
+ * Implements hook_schema().
+ */
+function client_service_update_schema() {
+  $schema = array();
+
+  $schema['client_service_update'] = array(
+    'description' => 'The base table for service updates.',
+    'fields' => array(
+      'client_id' => array(
+        'description' => 'Primary Key: Client ID.',
+        'type' => 'varchar',
+        'length' => 6,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+      'service_code' => array(
+        'description' => 'Primary Key: Service DBF code.',
+        'type' => 'varchar',
+        'length' => 6,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+      'client_name' => array(
+        'description' => 'The client name.',
+        'type' => 'varchar',
+        'length' => 100,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+      'dni_cif' => array(
+        'description' => 'The client DNI, NIF or CIF.',
+        'type' => 'varchar',
+        'length' => 15,
+        'not null' => FALSE,
+        'default' => '',
+      ),
+      'email' => array(
+        'description' => 'The client email.',
+        'type' => 'varchar',
+        'length' => 120,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+      'created' => array(
+        'description' => 'The Unix timestamp when the client service update was created.',
+        'type' => 'int',
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+      'processed' => array(
+        'description' => 'Indicate if service update was processed.',
+        'type' => 'int',
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+    ),
+    'primary key' => array('client_id', 'service_code'),
+  );
+
+  return $schema;
+}
+/**
+* Implements hook_install()
+*/
+function client_service_update_install() {
+  variable_set('sat_mail', 'sat@vlt.es');
+}
+
+/**
+* Implements hook_uninstall()
+*/
+function client_service_update_uninstall(){
+  variable_del('sat_mail');
+}
+
+/**
+* Implements hook_disable()
+*/
+function client_service_update_disable(){}
