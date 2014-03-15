@@ -60,26 +60,33 @@ function _client_service_add_services($client_name, $service_code, $client_id, $
     ->propertyCondition('type', 'client_service')
     ->fieldCondition('field_service_client', 'value', $client_id, '=')
     ->execute();
-  dpm($service_by_client);
   if (!$service_by_client) {
-    $results = db_select('node', 'n')
-      ->fields('n', array('nid'))->condition('type', 'client_service', '=')->execute()->fetchAssoc();
-    // Add or update the client services to the system.
+    // Add the client services to the system.
     $client_service = new stdClass();
     $client_service->type = 'client_service';
     node_object_prepare($client_service);
-    $client_service->title = $client_name . ' (' . $service_code . ')';
-    //$client_service->language = LANGUAGE_NONE;
-    $client_service->field_service_client[LANGUAGE_NONE][0]['value'] = $client_id;
-    $client_service->field_service_service[LANGUAGE_NONE][0]['tid'] = $tax_term->tid;
-    $client_service->field_service_date[LANGUAGE_NONE][0]['value'] = REQUEST_TIME;
-    $client_service->field_service_hours[LANGUAGE_NONE][0]['value'] = $tax_term->field_tax_service_hours[LANGUAGE_NONE][0]['value']; 
-    $client_service->field_service_computers[LANGUAGE_NONE][0]['value'] = $tax_term->field_tax_service_computers[LANGUAGE_NONE][0]['value'];
-    $client_service->field_service_revisions[LANGUAGE_NONE][0]['value'] = $tax_term->field_tax_service_revisions[LANGUAGE_NONE][0]['value'];
-    $client_service->field_service_payed[LANGUAGE_NONE][0]['value'] = 0;
-    $client_service->field_service_bill_number[LANGUAGE_NONE][0]['value'] = '';
-    node_save($client_service);
+  } else {
+    // Create new client services to revision.
+    $entity_obj = reset($service_by_client['node']);
+    $nid = $entity_obj->nid;
+    $client_service = node_load($nid);
+    // Keep the old service for revision log.
+    $old_service = $client_service->field_service_service[LANGUAGE_NONE][0]['tid'];
+    $old_tax_term = taxonomy_term_load($old_service);
+    $client_service->revision = 1;
+    $client_service->log = t('Updated service from %old_service to %new_service', array('%old_service' => $old_tax_term->name, '%new_service' => $tax_term->name));
   }
+  $client_service->title = $client_name . ' (' . $tax_term->name . ')';
+  //$client_service->language = LANGUAGE_NONE;
+  $client_service->field_service_client[LANGUAGE_NONE][0]['value'] = $client_id;
+  $client_service->field_service_service[LANGUAGE_NONE][0]['tid'] = $tax_term->tid;
+  $client_service->field_service_date[LANGUAGE_NONE][0]['value'] = REQUEST_TIME;
+  $client_service->field_service_hours[LANGUAGE_NONE][0]['value'] = $tax_term->field_tax_service_hours[LANGUAGE_NONE][0]['value']; 
+  $client_service->field_service_computers[LANGUAGE_NONE][0]['value'] = $tax_term->field_tax_service_computers[LANGUAGE_NONE][0]['value'];
+  $client_service->field_service_revisions[LANGUAGE_NONE][0]['value'] = $tax_term->field_tax_service_revisions[LANGUAGE_NONE][0]['value'];
+  $client_service->field_service_payed[LANGUAGE_NONE][0]['value'] = 0;
+  $client_service->field_service_bill_number[LANGUAGE_NONE][0]['value'] = '';
+  node_save($client_service);
 }
 
 function _client_service_get_term_by_dbf_code($service_terms, $dbf_code) {
