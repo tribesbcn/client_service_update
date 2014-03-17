@@ -20,6 +20,81 @@ function client_service_update_cron(){
   lock_release('client_service_update_locker');
 }
 
+/**
+ * Implements hook_menu().
+ */
+function client_service_update_menu() {
+  $items = array();
+  
+  $items['client_service_update/execute'] = array(
+    'title' => 'Execute client service update',
+    'page callback' => 'client_service_update_execute',
+    'access arguments' => array('execute client_service_update'),
+    'type' => MENU_LOCAL_ACTION,
+    'tab_parent' => 'clients',
+    'tab_root' => 'clients',
+    'weight' => 20,
+  );
+
+  return $items;
+}
+
+/**
+ * Implements hook_permission().
+ */
+function client_service_update_permission() {
+  $permissions = array(
+    'execute client_service_update' => array(
+      'title' => t('Execute client service update'),
+      'description' => t('Allows users to execute client service updates.'),
+      'restrict access' => TRUE,
+    ),
+  );
+
+  return $permissions;
+}
+
+function client_service_update_form_client_service_node_form_alter (&$form, &$form_state, $form_id) {
+  $form['field_service_client'] = module_invoke('dbf_client', 'field_service_client_changes', $form, $form_state);
+}
+
+function client_service_update_execute($is_cron = FALSE){  
+  $services_tax_voc = _client_service_get_vocabulary_by_name('services');
+  $services_terms = taxonomy_get_tree($services_tax_voc->vid, 0, NULL, TRUE);
+  drupal_set_title(t('Client service update'));
+  $content = array();
+  // Retrieve all not processed records from client_service_update
+  $pending_services = db_select('client_service_update', 'csu')
+    ->fields('csu', array('client_id', 'service_code', 'client_name', 'dni_cif', 'email', 'created', 'processed'))
+    ->condition('processed', 0, '=')->execute();
+  // Create a user account for each client with service.
+  foreach($pending_services as $ps){
+    
+    $temp_valid_clients = array('000265', '000230', '000237', '000210');
+    if(in_array($ps->client_id, $temp_valid_clients)){
+      
+      if (isset($ps->email) && !empty($ps->email) && $ps->service_code != 'CONT') {
+        try {
+          // Add the user to the system.
+          _client_service_add_system_user($ps->client_id, $ps->client_name, $ps->dni_cif, $ps->email, $ps->service_code);
+          // Add the client services to the system.
+          $tax_term = _client_service_get_term_by_dbf_code($services_terms, $ps->service_code);
+          _client_service_add_services($ps->client_name, $ps->service_code, $ps->client_id, $tax_term);
+        } catch(Exception $e) {
+          watchdog_exception('client_service_update', $e);
+        }
+      }
+      // Mark client_service_update processed field as TRUE.
+      $num_updated = db_update('client_service_update')->fields(array('processed' => TRUE))
+        ->condition('client_id', $ps->client_id, '=')
+        ->execute();
+      
+    }
+    
+  }
+  return $content;
+}
+
 function _client_service_add_system_user($client_id, $client_name, $dni_cif, $client_email, $service_code) {
   $user_info = _client_service_validate_username($dni_cif);
   if(!$user_info) {
@@ -112,75 +187,4 @@ function _client_service_validate_username($username) {
   $user_info = db_select('users', 'u')
     ->fields('u')->condition('name', $username, '=')->execute()->fetchAssoc();
   return ($user_info) ? $user_info : FALSE;
-}
-
-function client_service_update_execute($is_cron = FALSE){  
-  $services_tax_voc = _client_service_get_vocabulary_by_name('services');
-  $services_terms = taxonomy_get_tree($services_tax_voc->vid, 0, NULL, TRUE);
-  drupal_set_title(t('Client service update'));
-  $content = array();
-  // Retrieve all not processed records from client_service_update
-  $pending_services = db_select('client_service_update', 'csu')
-    ->fields('csu', array('client_id', 'service_code', 'client_name', 'dni_cif', 'email', 'created', 'processed'))
-    ->condition('processed', 0, '=')->execute();
-  // Create a user account for each client with service.
-  foreach($pending_services as $ps){
-    
-    $temp_valid_clients = array('000265', '000230', '000237', '000210');
-    if(in_array($ps->client_id, $temp_valid_clients)){
-      
-      if (isset($ps->email) && !empty($ps->email) && $ps->service_code != 'CONT') {
-        try {
-          // Add the user to the system.
-          _client_service_add_system_user($ps->client_id, $ps->client_name, $ps->dni_cif, $ps->email, $ps->service_code);
-          // Add the client services to the system.
-          $tax_term = _client_service_get_term_by_dbf_code($services_terms, $ps->service_code);
-          _client_service_add_services($ps->client_name, $ps->service_code, $ps->client_id, $tax_term);
-        } catch(Exception $e) {
-          watchdog_exception('client_service_update', $e);
-        }
-      }
-      // Mark client_service_update processed field as TRUE.
-      $num_updated = db_update('client_service_update')->fields(array('processed' => TRUE))
-        ->condition('client_id', $ps->client_id, '=')
-        ->execute();
-      
-    }
-    
-  }
-  return $content;
-}
-
-/**
- * Implements hook_menu().
- */
-function client_service_update_menu() {
-  $items = array();
-  
-  $items['client_service_update/execute'] = array(
-    'title' => 'Execute client service update',
-    'page callback' => 'client_service_update_execute',
-    'access arguments' => array('execute client_service_update'),
-    'type' => MENU_LOCAL_ACTION,
-    'tab_parent' => 'clients',
-    'tab_root' => 'clients',
-    'weight' => 20,
-  );
-
-  return $items;
-}
-
-/**
- * Implements hook_permission().
- */
-function client_service_update_permission() {
-  $permissions = array(
-    'execute client_service_update' => array(
-      'title' => t('Execute client service update'),
-      'description' => t('Allows users to execute client service updates.'),
-      'restrict access' => TRUE,
-    ),
-  );
-
-  return $permissions;
 }
